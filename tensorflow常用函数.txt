@@ -1,0 +1,65 @@
+1、
+tf.reduce_sum(
+    input_tensor,
+    axis=None,
+    keepdims=None,
+    name=None,
+    reduction_indices=None,
+    keep_dims=None
+)
+
+归约求和，一般控制前两个参数即可，如果axis=None，则对所有axes归约，最终结果是一个scalar
+
+2、
+tf.reduce_mean(
+    input_tensor,
+    axis=None,
+    keepdims=None,
+    name=None,
+    reduction_indices=None,
+    keep_dims=None
+)
+
+同上，归约求平均值
+
+3、
+tf.reshape(
+    tensor,
+    shape,
+    name=None
+)
+
+第一个、第二个参数，shape用list或者tuple都可以
+
+4、
+tf.nn.moments(
+    x,
+    axes,
+    shift=None,
+    name=None,
+    keep_dims=False
+)
+
+计算输入tensor在指定范围内的一阶矩（平均值）和二阶矩（方差）
+第二个参数axes为int list，指定在哪些维度获取待统计的样本，比如x shape = [B, H, W, C]，若axes=[0]，则分别对于batch内的各个图像进行
+
+5、
+tf.expand_dims(
+    input,
+    axis=None,
+    name=None,
+    dim=None
+)
+
+扩展输入input，根据axis（integer）指定的位置插入一个额外的维度（长度为1），可以认为新维度是插入在axis那个旧维度前面的。
+
+6、
+tf.equal(
+    x,
+    y,
+    name=None
+)
+
+计算x和y的逐元素==结果，x和y的shape与dtype必须相同，返回结果形状不变，dtype=bool
+
+

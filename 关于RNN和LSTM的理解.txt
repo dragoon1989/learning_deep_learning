@@ -1,0 +1,53 @@
+1、最基本的RNN模型是基于全连接层建立的：
+几个基本符号：
+x——输入
+U——输入转移矩阵（偏移就省略了）
+h——全连接层的状态
+W——时间方向的转移矩阵（也省略了偏移）
+V——输出的转移矩阵
+o——输出
+
+hi是由当前输入xi与前一刻的全连接层状态hi-1合成的，假如用tanh作为激活函数：
+hi = tanh(Ui*xi + Wi*hi-1 + bi)		因为Ui*xi和Wi*hi-1的形状一定相同，所以共用一个偏移bi就够了
+然后输出照样是通过hi计算即可：
+oi = tanh(Vi*hi + b'i)
+
+2、LSTM是为了解决RNN无法维持长期记忆的问题而设计的，有各种各样的变种，但是总体来讲，一定有如下结构：
+输入x
+全连接层状态h
+细胞状态c
+遗忘门f
+记忆门i
+输出门tanh(c)
+待输出结果o
+
+它们之间的关系大体上是这样的：
+（1）ft是由xt与ht-1合成的
+（2）it是由xt与ht-1合成的
+（3）ot是由xt与ht-1合成的
+（4）ct-1先经过ft的遗忘过滤（一个Hadamard乘法，也就是MATLAB中的点乘），得到c't
+	然后用xt与ht-1合成一个新增记忆c''t，由c't + Hadamard(it, c''t)得到（不经过激活）新的细胞状态ct
+（5）新的全连接状态ht = Hadamard(tanh(ct), ot)，注意这里需要激活细胞状态
+
+在这种情况下，t时刻的前向传播过程可以写成：
+ft = tanh(Wfx*xt + Wfh*ht-1 + bf)
+it = tanh(Wix*xt + Wih*ht-1 + bi)
+ot = tanh(Wox*xt + Woh*ht-1 + bo)
+c''t = tanh(Wcx*xt + Wch*ht-1 + bc)
+ct = (ft)o(ct-1) + (it)o(c''t)
+ht = (ot)o(tanh(ct))
+实际上，LSTM能够抑制梯度消失现象的关键就在生成细胞状态所进行的记忆和遗忘操作都是通过Hadamard乘法进行的，是完全的线性运算，梯度在这里是保持的，不会增减，因此可以大幅度减轻连续求导造成的梯度剧烈变化。
+
+LSTM的变种很多，例如一些研究中喜欢加入peephole，即允许ft、it的计算过程中参考前一时刻的细胞状态ct-1，而ot的计算过程参考新的细胞状态ct：
+ft = tanh(Wfx*xt + Wfh*ht-1 + (Wfc)o(ct-1)+ bf)
+it = tanh(Wix*xt + Wih*ht-1 + (Wic)o(ct-1) + bi)
+ot = tanh(Wox*xt + Woh*ht-1 + (Woc)o(ct) + bo)
+c''t = tanh(Wcx*xt + Wch*ht-1 + bc)
+ct = (ft)o(ct-1) + (it)o(c''t)
+ht = (ot)o(tanh(ct))
+
+3、根据LSTM的原理，也可以理解ConvLSTM：相比于普通的全连接LSTM，ConvLSTM的输入序列的每个时间点都是一个具有空间分布的数据结构（可能是一张2D/3D，单通道/多通道的图像），因此在进行每个时刻的数据处理时，都需要移动一个卷积核，逐块地处理输入图像，同时，在处理图像的某个局部时，还要依赖于上个时刻处理相同位置时的结果。
+因此，实际上只需要将LSTM内部对输入数据的权值矩阵乘积转换成卷积核的卷积扫描操作，就能得到ConvLSTM的单元
+注意，ConvLSTM的应用情景：时间相关的输入流，并且流中的每个切片又具有空间分布的特征，这种情况下使用ConvLSTM可以同时捕捉时间和空间范围的信息，同时引入的变量不会像全连接的LSTM那么多。最典型的例子是视频图像的分析。
+
+在Keras（以及Tensorflow的Keras模块中）的layers模块中提供了建立ConvLSTM的功能，即ConvLSTM2D，一个处理2D多通道图像流的LSTM单元，在Keras的官方介绍中，还给出了一个例子：https://blog.csdn.net/luoganttcc/article/details/83539743

@@ -1,0 +1,17 @@
+tensorflow中的name scope和variable scope都类似于C++中的namespace这个概念，但二者之间有一些关键区别。
+
+1、name scope是一个纯粹的namespace，凡是在某个name scope的context中建立的tensor、variable或op，其name都会自动被追加一个name scope的前缀（不同name scope可以叠加）
+说明：
+（1）使用Variable建立的variable，都服从上述规律
+（2）使用get_variable建立的variable，都不服从上述规律
+（3）如果没有明确指定name scope，则视为处于全局scope中
+
+2、variable scope是一个针对variable的namespace，在某种意义上与name scope类似，凡是在某个variable scope的context中建立的variable，通常都会在name上追加一个前缀
+说明：
+（1）所有方法建立的variable都服从上述规律
+（2）在不同name scope中建立的variable，可能属于同一个variable scope
+（3）如果没有明确指定的variable scope，variable会自动落入全局scope
+
+3、name scope就是为了给graph中的元素添加name的前缀，方便解读和管理模型
+variable scope是为了收容各种不同定位的variable，方便在模型的不同部分之间进行variable共享
+具体来说，在variable scope中用Variable构造函数建立的variable，不会存在命名冲突的问题，它们的命名都会根据建立的先后次序自动追加后缀以示区别，因此调用多次Variable构造函数，就会得到多个variable。但在有的情况下需要使用的variable应该是同一个实体，不能允许这种每次都新建的行为，这种情况下可以使用get_variable的方法建立variable，这样建立的variable，会有严格的name检查：凡是位于同一个variable scope中的两个get_variable建立的变量，不允许具有相同的name，否则会报错。这样保证variable name与variale是一一对应的，在需要多次使用同一个variable（或者说共享）时，先对这个variable所在的variable scope调用reuse_variables()，之后再调用get_variable(name)得到的就是对应name的那个variable。

@@ -1,0 +1,16 @@
+https://www.cnblogs.com/lynsyklate/p/7720045.html
+
+1、读取文件：
+img = cv2.imread(name)
+
+返回值img是一个numpy array，存储格式是HWC，dtype=uint8，其中通道顺序为BGR，与一般的彩色通道RGB正好反序。
+
+2、通道转换：
+img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+转换为RGB格式
+
+3、通道分割：
+b,g,r = cv2.split(img)
+
+4、图片缩放：
+img = cv2.resize(img, shape=(newWidth, newHeight)[, cv2.INTER_LINEAR])

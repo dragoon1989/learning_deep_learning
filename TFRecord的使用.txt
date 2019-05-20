@@ -1,0 +1,76 @@
+tensorflow推荐使用TFRecord作为数据序列化的文件格式，并提供了一些便利的接口用于操作这种数据。
+
+1、TFRecord本质上是一种二进制文件，内部的单个数据项称为一个example，每个example可以视为多项feature数据和对应label数据的一个dict：
+feature1: 数据, feature2: 数据, ..., label: 标签
+
+2、生成TFRecord文件：
+通常，可以事先把要使用的数据写成TFRecord文件，供后面训练-测试-验证过程之用：
+（1）读取原始数据的一项
+（2）将原始数据的这一项写成TFRecord的example条目
+（3）将example条目序列化（写入TFRecord文件）
+（4）回到（1），重复这一过程
+
+假设原始数据的每一项包含特征feature数据和一个label标签，所有feature存储在features张量里，label存储在labels张量里。
+如何创建TFRecord的example条目：
+# 先生成一个包含feature和label的dict（key的名字其实可以随意）
+# 注意，example条目只能接受3种数据：tf.train.BytesList、tf.train.Int64List和tf.train.FloatList
+# 实际上就是byte（当然，也可以是连续byte构成的string）、int64和float32
+example={'feature' : tf.train.Feature(bytes_list=tf.train.BytesList(features[i])),
+		'label' :     tf.train.Feature(int64_list=tf.train.Int64List(labels[i]))}
+# 把上述dict包装成一个复数features
+features = tf.train.Features(example)
+# 再包装成一个example条目
+example=tf.train.Example(feature=features)
+
+如何把example条目序列化：
+# 先创建一个TFRecordWriter用于建立指定的输出TFRecord文件
+tf_wrt = tf.python_io.TFRecordWriter(output_filename)
+# 将example条目作为字节流（也就是string）以二进制形式写入
+tf_wrt.write(example.SerializeToString())
+# 所有条目写入完成后，关闭文件
+tf_wrt.close()
+
+3、读取TFRecord文件
+比较方便的方法是使用tf.data.Dataset中的TFRecordDataset提供的API，可以充分利用TFRecord的优点，进行多线程的读取-数据处理-打包操作。
+
+假设要读取的文件名列表为filenames
+# 创建一个TFRecordDataset用于读取这些TFRecord文件
+files = tf.data.Dataset.TFRecord(filenames=filenames,
+						buffer_size=256*1024,	# 缓冲区大小（byte）
+						num_parallel_reads=4)	# 并行读取的文件数
+
+# 调用user-defined函数parse_example，解析文件里的每个条目
+# 同样可以使用多线程进行多个文件的IO加速
+dataset = files.interleave(map_func=parse_example,	# map函数
+					cycle_length=4,			# 并行处理的文件数
+					block_length=16)		# 每个文件连续处理16个条目，然后转到下一文件
+
+# 或者可以用多线程加速多个条目的处理：
+dataset = files.map(map_func=parse_example, num_parallel_calls=4)
+
+# 能不能把两者结合起来，同时处理多个文件，并且每个文件的map处理中都使用多线程加速？
+# 也许可以这样：
+files = tf.data.Dataset.from_tensor_slices(filenames)
+dataset = tf.contrib.parallel_interleave(map_func=lambda x:
+								tf.data.Dataset.TFRecordDataset(filenames=x,
+									buffer_size=256*1024).map(map_func=parse_example,
+										num_parallel_calls=4),
+							 cycle_length=4, block_length=16)
+
+# 其中，如何解析个别的example条目，使用的函数是parse_example
+def parse_example(serialized_example):
+		"""internal method to parse single TFRecord example"""
+		# define the format of example
+		example_fmt = {'feature' : tf.FixedLenFeature([], tf.string),	# byte型的feature数据
+					'label': tf.FixedLenFeature([], tf.int64)}		# int64型的label数据
+		# use tensorflow method to read an example from the file
+		features = tf.parse_single_example(serialized_example, example_fmt)
+		# return a tuple
+		return features['feature'], feature['label']
+
+最后，使用dataset的prefetch操作，将模型train的时间与TFRecord读取的时间重叠起来（训练前一批数据的同时，读取下一批数据）
+dataset = dataset.batch(100)	# 定义一批数据的大小
+dataset = dataset.prefetch(2)	# 读取下面2批数据，这个应该放在dataset所有操作的最后
+
+实际上，batch和map可以合并在一起进行，效率会有所提高：
+dataset = dataset.apply(tf.contrib.data.map_and_batch(map_func, batch_size, num_parallel_calls)

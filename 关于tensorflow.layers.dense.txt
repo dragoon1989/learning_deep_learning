@@ -1,0 +1,28 @@
+API接口：
+
+tf.layers.dense(
+    inputs,
+    units,
+    activation=None,
+    use_bias=True,
+    kernel_initializer=None,
+    bias_initializer=tf.zeros_initializer(),
+    kernel_regularizer=None,
+    bias_regularizer=None,
+    activity_regularizer=None,
+    kernel_constraint=None,
+    bias_constraint=None,
+    trainable=True,
+    name=None,
+    reuse=None
+)
+
+向graph中添加一个全连接层：
+inputs是输入给该层各个神经元的输入层，是形状为[batch_size, M]的tensor
+units是一个整数，表示层内的神经元数量
+前两个参数决定了输出信号的形状为：[batch_size, units]
+activation是激活函数的handle，通常可以使用tf.nn模块中定义的各种标准激活函数
+kernel_initializer是权值矩阵（形状为[M, units]）的初始化方式，可以使用tf.initializers模块中的API
+其他参数用到时再学习
+
+因为全连接层的最经典定义中每个神经元都是只负责处理一个向量输入，所以通常的inputs都是[batch_size, M]形的（每个向量长度为M），但实际上，因为全连接层内的实际操作是计算inputs*W+b，再把结果用激活函数处理一遍，因此即便是多维的输入，也能够得到结果，例如inputs形状为[batch_size, M1, M2]，则输出结果为[batch_size, M1, units]

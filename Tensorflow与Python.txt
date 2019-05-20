@@ -1,0 +1,162 @@
+1、numpy生成随机数
+import numpy as np
+np.random.random()		#生成单个[0, 1.0]之间的随机数
+np.random.random((2,3))	#生成一个2x3的随机数矩阵（参数(2,3)描述矩阵形状）
+
+2、实现一个线性回归的简单脚本
+
+import tensorflow as tf
+import numpy as np
+
+rng = np.random	# numpy随机数发生器
+
+learn_rate = 0.01
+
+# 生成训练数据
+train_X = np.asarray([3.3,4.4,5.5,6.71,6.93,4.168,9.779,6.182,7.59,2.167,
+                         7.042,10.791,5.313,7.997,5.654,9.27,3.1])
+ 
+train_Y = np.asarray([1.7,2.76,2.09,3.19,1.694,1.573,3.366,2.596,2.53,1.221,
+                         2.827,3.465,1.65,2.904,2.42,2.94,1.3])
+
+nsample = train_X.shape[0]	# numpy的矩阵都有shape属性，描述矩阵各个维度的大小（shape[0]就是第一个维度的长度）
+                         
+# 创建tensorflow的graph
+X = tf.placeholder(tf.float32, [None])
+Y = tf.placeholder(tf.float32, [None])		# 第一个参数（类型）是必须的，第二个参数（形状）不必须
+
+W = tf.Variable(rng.random())
+b = tf.Variable(rng.random())	# 第一个参数指定variable初始化时的值
+
+# 计算y = WX+b
+# 无论是placeholder还是variable，都属于tensor
+prediction = W*X + b
+
+# 计算loss
+loss = tf.reduce_sum(tf.square(prediction-Y),0)		# square(x)类似于matlab的x.^2
+										# reduce_sum(x,dim)对x的第dim个维度归约求和
+										# 常用的tensor有0阶（标量）、1阶（向量）、2阶
+										# （矩阵）、3阶等
+										# 它们的形状可以表示为[]、[D0]、[D0,D1]、
+										# [D0,D1,D2]等
+# 例如：[[1,2],[3,4]]就是一个2阶tensor，第一个维度（序号0）是最外圈中括号中的部分，第二个维度（序号1）是内圈中括号的部分
+# 对于归约类函数reduce_XXX，如果第二个参数是i，则表示对第i+1个维度归约；如果第二个参数不填（默认值None），表示对所有维度归约。
+# optimizer，使用梯度下降计算更新步长
+train_step = tf.train.GradientDescentOptimizer(learn_rate).minimize(loss)	# 用learn_rate作为optimizer的参数
+
+# 对于variable，必须在session中进行初始化
+init = tf.global_variables_initializer()		# global_variables_initializer是负责variable初始化的op
+
+# 创建tensorflow session
+with tf.Session() as sess:		# with ... [as ...]用于上下文管理，确保异常情况下也能正确处理资源分配
+	sess.run(init)			# session的run(x, ...)用于在graph中计算tensor x的值
+	for i in range(1, nsample):
+		sess.run(train_step, feed_dict={X:train_X[i], Y:train_Y[i]})
+						# feed_dict用于建立输入数据与placeholder间的映射字典
+						# 这里把train_X和train_Y的第i个元素分别映射到key X和Y上
+						# optimizer除了计算步长外，还会自动更新各个已注册的variable的大小
+						# 这里也可以写成：train_step.run(feed_dict={X:train_X[i], Y:train_Y[i]})
+
+	# 检查最终的loss
+	# 注意，由于with...as...上下文管理的作用，只有对齐的代码块才被视为是同一层级的
+	# 如果这一行向前提一下，就脱离了with的作用域，而退出with时，Session()会自动关闭释放资源
+	# 因此再调用sess.run()就是错误的
+	# 所以使用python时应当注意代码块的对齐，保证作用域的正确性
+	train_loss = sess.run(loss, feed_dict={X:train_X, Y:train_Y))
+	print(train_loss)
+
+3、Tensorflow的工作原理：
+tensorflow的接口基于python，但是python进行复杂计算效率不足，因此tensorflow将计算部分放在python之外通过其他内核完成（各种外部库）。但频繁在接口与计算之间切换本身也是非常低效的，tensorflow的做法是在python接口中先把所有的计算流程描述出来，然后整体在外部内核中执行，最后再一次性把结果返还输出。
+
+4、Tensorflow对MNIST问题的简单建模
+（1）首先，官方提供了一个python脚本来下载和管理MNIST的数据，文件名为input_data.py
+
+# Copyright 2015 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+"""Functions for downloading and reading MNIST data."""
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
+# pylint: disable=unused-import
+import gzip
+import os
+import tempfile
+
+import numpy
+from six.moves import urllib
+from six.moves import xrange  # pylint: disable=redefined-builtin
+import tensorflow as tf
+from tensorflow.contrib.learn.python.learn.datasets.mnist import read_data_sets
+# pylint: enable=unused-import
+
+把该文件放在工作路径下，在使用时import input_data即可
+
+（2）加载MNIST数据
+import input_data
+mnist = input_data.read_data_sets('MNIST_data', one_hot=True)	#第一个参数指定数据的存放位置（这里用的是相对路径下的MNIST_data）
+之后，就可以用结构体mnist管理数据
+# 注意，python中的TrueFalse都是首字母大写……
+
+（3）建立神经网络模型
+import tensorflow as tf
+
+x = tf.placeholder("float", [None,28*28])	#因为MNIST的手写字图片都是28x28的
+y = tf.placeholder("float", [None,10])		#标签有10种，对应0～9
+
+# 定义一个单层的神经网络，接受[None,28*28]的输入，输出[None,10]的预测标签
+weights = tf.Variable(tf.random_normal([28*28,10], 0, 0.5))	# 用正态分布初始化权值矩阵
+biases = tf.Variable(tf.zeros([10])+0.1)	# 初始化偏移量为0.1
+###################################
+prediction = tf.nn.softmax(matmul(x,weights) + biases)		# 这里使用softmax作为activation function
+###################################
+
+# 为了方便初始化所有variable：
+init = tf.global_variables_initializer()
+
+# 定义loss函数，这里使用交叉熵的概念，描述预测值相对于真实值的无效性
+###################################
+loss = -tf.reduc_sum(y*tf.log(prediction))
+###################################
+
+# 前向反馈，松弛因子是0.5
+train_step = tf.train.GradientDescentOptimizer(0.5).minimize(loss)
+
+# 使用test数据验证模型的准确率
+# 这里使用argmax(data, axis, ...)函数，返回data在axis轴上的最大分量所对应的索引（因为y和prediction都是[None, 10]形状的，axis=1就表示对第二个维度进行计算）
+# 如果返回true，就是预测正确，false就是错误
+correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(prediction, 1))
+# 求个平均就是正确率（为此先把bool型的correct_prediction cast到float上，否则无法直接对bool进行求和或者平均）
+accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
+
+# 开始训练
+with tf.Session() as sess:
+	sess.run(init)			# 先初始化
+	for i in range(1000):		# 训练1000次
+		batch = mnist.train.next_batch(100)		# 一个epoch使用100个输入
+										# 不过这里似乎因为numpy的更新而不能这么用了？
+		sess.run(train_step, {x: batch[0], y: batch[1]})
+	# 训练完成，使用另一组test数据验证模型
+	sess.run(accuracy, {x: mnist.test.image, y: mnist.test.labels})
+	print(accuracy)
+
+5、对于Tensorflow中的算术运算，有如下要说的：
+注意上面脚本中用###################################包围的部分
+（1）一般情况下，tensorflow中的张量运算只能对形状相同的tensor进行，并且等价于张量之间对应元素的运算（类似于matlab中的.运算）
+（2）张量与标量的运算会自动对张量所有元素执行
+（3）如果张量A与张量b形状不同，但在某几个对应维度上是相同的，会把b自动扩展到其他维度上与A进行运算（广播机制，来自numpy）
+（4）除了元素级的张量运算之外，还可以通过tensorflow的mat系列函数进行正常的矩阵运算（如matmul等）
+

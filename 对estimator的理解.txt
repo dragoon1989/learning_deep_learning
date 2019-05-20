@@ -1,0 +1,301 @@
+1、先讨论自定义的estimator：
+estimator的基类Estimator位于tensorflow.estimator模块中，所有自定义的estimator都可以通过调用基类的构造函数来实例化，其函数签名为：
+classifer = tensorflow.estimator.Estimator(model_fn,		# 模型函数
+								params		# 模型参数)
+
+对于一个实例化的estimator（假设就是上面的classifier），Estimator类提供了接口用于对其执行训练、评估和运行等操作。
+
+对一个estimator进行训练（train）：
+classifier.train(input_fn,		# 输入函数，获取输入数据
+		      steps)			# 优化步长
+
+对一个estimator进行评估（evaluate）：
+classifier.evaluate(input_fn		# 输入函数)
+
+运行一个estimator，给出预测结果（predict）：
+classifier.predict(input_fn)
+
+2、因此，estimator实际上是将很多操作在高层进行了封装，为了创建estimator，先来看model_fn如何定义
+
+一个model_fn的签名具有如下形式：
+def my_model_fn(			# 函数名可以随意……
+			   features, 	# This is batch_features from input_fn
+			   labels,   		# This is batch_labels from input_fn
+			   mode,     	# An instance of tf.estimator.ModeKeys, see below
+			   params):  	# Additional configuration
+features和labels都是从输入获取的成对信息
+mode则根据对estimator所执行操作（train、evaluate或是predict）的不同会传入不同的值
+params是其他模型所需的参数的打包
+
+在model_fn内部，必须完成如下几项工作：
+（1）定义神经网络的输入层、隐层和输出层
+（2）根据输入mode的不同，分别执行相应的操作，例如：
+		如果mode = tensorflow.estimator.ModeKeys.PREDICT，则应该根据输入feature求其label
+		如果mode = tensorflow.estimator.ModeKeys.EVAL，则应评估模型在测试数据上的准确率
+		如果mode = tensorflow.estimator.ModeKeys.TRAIN，应使用合适的optimizer进行训练
+
+3、神经网络的搭建：
+（1）所谓输入层，其实就是特征数据本身，因此需要以一种约定好的方式从输入数据中提取所需的特征数据，根据后面神经网络的需要不断feed给后面的网络层。
+estimator中推荐使用feature column来作为输入层，使用：
+tensorflow.feature_column.input_layer(features,		# 输入特征数据
+							  feature_column,	# 预设好的feature column
+							  ...)
+自动可以获取一组特征数据的输入
+（2）隐层可以有多种，比如常见的全连接层、卷积层、池化层等，以全连接层为例，可以使用：
+tensorflow.layers.dense(inputs,				# 一组输入的特征数据（来自输入层，feed给每个神经元）
+				    units,				# 该层神经元的数量
+				    activation=None,		# 激活函数（如果是None，则没有激活，直接线性输出）
+				    use_bias=True,		# 是否使用偏移量
+				    kernel_initializer=None,
+				    bias_initializer=tf.zeros_initializer(),
+				    kernel_regularizer=None,
+				    bias_regularizer=None,
+				    activity_regularizer=None,
+				    kernel_constraint=None,
+				    bias_constraint=None,
+				    trainable=True,
+				    name=None,
+				    reuse=None
+				)
+
+（3）输出层，根据隐层的输出结果，和预期的分类标签，确定如何由输出转换为标签，方法很多，比如softmax等
+
+上述神经网络建立的过程，实际上体现为数据的流动，因此可以用这样的方式来描述：
+net = tensorflow.feature_column.input_layer(features, feature_columns)
+# 数据从输入的feature，转换为一组可以feed给单个神经元的名为net的dense tensor
+for i in range(2):
+	net = tensorflow.layers.dense(net, [10], tensorflow.nn.relu)
+# 数据依次流过两层全连接层，每层都包括10个神经元，并且使用reLU作为激活函数，最终流出的数据仍然存储在名为net的tensor中，只是它的形状已经与最初不同了
+net = tensorflow.layers.dense(net, [3], activation=None)
+prob = tensorflow.nn.softmax(net)
+# 假设最后的分类标签只有3类，那么就建立一个从隐层输出转换到3路输出的输出层，输出结果可以用softmax来给出3类标签预测的概率
+
+4、特征列feature_column
+接下来要回答的问题是：为了按照上面的机制建立网络，如何建立feature_column来获取输入数据？
+
+特征列实际上就是定义一种对输入原始数据进行转换，得到模型可接受数据的方法
+模块中提供的可用特征列包括：
+（1）numeric_column——numeric_column(key, ...)，其中key是一个字符串，其定义的规则为：从输入的feature中提取名为key的一列的数值
+（2）bucketized_column——bucketized_column(source_column, boundaries)
+其中source_column是一个numeric_column，指定从输入feature中提取某一列数据；boundaries是一个以同类型数值为元素的python list（即[a, b, c]类似的），其定义的规则为：将输入feature中某一列数值按照boundaries定义的间隔进行分类，位于( , a)的数值输出[1,0,0,0]，位于[a,b)的数值输出[0,1,0,0]，位于[b,c)的数值输出[0,0,1,0]，而[c, )的数值输出是[0,0,0,1]
+（3）categorical_column_with_identity——categorical_column_with_identity(key, num_buckets, ...)
+针对的输入feature必须是[0, num_buckets)之间的整数，其定义的规则为：将输入feature中名为key的一列数据转换为离散化的向量输出，即0->[1,0,0,...]，1->[0,1,0,...]，……
+（4）categorical_column_with_vocabulary_list——categorical_column_with_vocabulary_list(key, vocabulary_list,...)，针对的是一系列离散符号组成的feature数据，例如"Beijing","Shanghai","Xian"等的集合，这些可能的符号构成的列表即为vocabulary_list，其定义的规则是：将输入feature中名为key的一列的数据转换为离散化的向量输出，即"Beijing"->[1,0,0,...]，"Shanghai"->[0,1,0,...]，……
+（5）其他
+
+为了创建输入层，直接调用tensorflow.feature_column.input_layer(features, feature_columns, ...)即可，其中features是任意一种从key值（字符串）映射到特征数据的结构；feature_columns是一个若干feature_column构成的列表，用于从features中按照各自的规则提取特征数据，最后的输出是一个dense tensor，可以直接feed给第一个隐层的任意一个神经元。
+
+5、输入函数——input function
+为了规范化地处理输入数据，生成feature_column可处理的features，estimator模型要求必须给定满足一定输入输出规范的输入函数input function。
+
+input function可以接受任何形式的输入，只对它的输出有要求：
+def input_fn(data)
+	......
+	return feature_dict, label
+返回值必须是两个，一个是字典，一个是张量（实际上就是(字典, 张量)的元组）：
+（1）字典的key包含各种feature的名称（字符串），对应的value则是各个特征的取值本身
+比如说，一个batch有n个项目，其特征数据分为'a', 'b', 'c'三类，则feature_dict应当形如：
+{'a' : [a1, a2, ..., an]; 'b' : [b1, b2, ..., bn]; 'c' : [c1, c2, ..., cn]}
+（2）label是一个tensor，包含batch里各项对应的标签
+
+6、输入管道的搭建——Dataset api
+为了更好地从各种情境中搜集数据，并随心所欲的进行处理并输出，tensorflow推荐使用data api下的Dataset类
+（1）Dataset表示一系列具有相同形式的不同数据的集合，每个单项的数据成为一个元素。
+为了建立Dataset，必须给定原始数据的来源，可用的方式包括：以其他tensor为来源、以文件为来源、以其他Dataset为来源等。
+常用的构造方法：
+dataset1 = tf.data.Dataset.from_tensor_slices( tf.random_uniform([4, 10]) )
+from_tensor_slices会自动按照输入tensor或者tensor元组的第一个维度（通常就是batch的维度）进行切分，提取各个元素（通常就是每个batch对应一个元素）
+例如：print(dataset1.output_types)  # ==> "tf.float32"	# 上面的每个元素都是一个float张量
+	  print(dataset1.output_shapes)  # ==> "(10,)"		# 沿着第一个维度（4）切分，每个元素就是一个长度为10的向量
+
+
+
+（2）每个元素可能包含一个或多个普通的tensor对象，称为组件，对于组件，最重要的属性是其type和shape，可以通过Dataset.output_types和Dataset.output_shapes来获取元素中所有组件的这两个属性。一个元素可以是一个tensor的元组，也可能是多个tensor的元组，或者是tensor与tensor元组的复合元组。
+在建立Dataset时，可以为元素内的各个组件命名，方便通过组件名直接索引，通常一个组件就对应输入数据的一种特征：
+要为组件命名，可以直接建立一个组件名->组件的字典，然后对字典进行Dataset的构建：
+dataset = tf.data.Dataset.from_tensor_slices(
+   {"a": tf.random_uniform([4]),
+    "b": tf.random_uniform([4, 100], maxval=100, dtype=tf.int32)}
+    )
+print(dataset.output_types)  # ==> "{'a': tf.float32, 'b': tf.int32}"
+print(dataset.output_shapes)  # ==> "{'a': (), 'b': (100,)}"
+可见，对字典的切分，实际上就是切分成了大量的小字典，每个小字典就是一个元素，在元素中就可以用组件名索引对应的组件。
+
+（3）消耗元素，也就是遍历提取dataset中的元素，使用的是另一个api：tf.data.Iterator
+迭代器都是可以直接由Dataset的接口创建出来的，最常用的有：
+iterator = dataset.make_one_shot_iterator()	# 单次迭代器，每次返回dataset中的一个元素
+使用iterator.get_next()就能返回下一个元素。当所有元素遍历完毕后，会返回tf.errors.OutOfRangeError，并且进入不可用状态。
+
+（4）Dataset支持对数据进行各种复杂的处理，这也是利用它的目的之一。
+Dataset.map(f)		通过函数f对所有元素进行给定的处理，生成一个新的dataset并返回
+Dataset.batch(n)	将连续的n个元素中的组件进行分别归并，由此生成一个新的dataset并返回
+Dataset.shuffle(n)	随机shuffle，生成一个新的dataset并返回
+Dataset.repeat(count=None)	将这个集合复制count次，生成一个新的dataset并返回，如果count=None，表示集合会无限重复下去（iterator不会迭代到尽头）
+
+7、工作模式：
+当estimator调用其train()、evaluate()和predict()接口时，会自动通过mode参数传入以下三种模式参数：
+train——ModeKeys.TRAIN
+evaluate——ModeKeys.EVAL
+predict——ModeKeys.PREDICT
+根据模式不同，模型函数必须执行相应的动作，返回规定的结果：
+（1）train：必须返回一个loss值，以及一个包含对网络修正指令（即train operation）的estimator.EstimatorSpec对象
+（2）evaluate：必须返回一个loss值，以及至少一个包含评价指标的estimator.EstimatorSpec对象
+（3）predict：必须返回一个包含正常预测结果的estimator.EstimatorSpec对象
+
+这里的tf.estimator.EstimatorSpec的构造函数为：
+EstimatorSpec(
+		    cls,
+		    mode,
+		    predictions=None,
+		    loss=None,
+		    train_op=None,
+		    eval_metric_ops=None,
+		    export_outputs=None,
+		    training_chief_hooks=None,
+		    training_hooks=None,
+		    scaffold=None,
+		    evaluation_hooks=None,
+		    prediction_hooks=None
+		    )
+一般输入mode参数，同时根据mode的不同，分别选择predictions、loss、train_op和eval_metric_ops中的一个或几个参数作为输入即可。
+
+
+下面是对TF官网上鸢尾花分类网络中的自定义estimator的逐行解读：
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
+import argparse
+import tensorflow as tf
+
+import iris_data			# 导入用来下载和读取原始数据的模块
+
+parser = argparse.ArgumentParser()
+# 添加一个参数，名为batch_size
+parser.add_argument('--batch_size', default=100, type=int, help='batch size')
+# 添加一个参数，名为train_steps
+parser.add_argument('--train_steps', default=1000, type=int,
+                    help='number of training steps')
+
+# 模型函数：
+def my_model(features, labels, mode, params):
+    """DNN with three hidden layers, and dropout of 0.1 probability."""
+    # Create three fully connected layers each layer having a dropout
+    # probability of 0.1.
+    # 输入层，features是输入的特征数据，params的'feature_columns'映射到一个特征列列表
+    # 特征列的定义需要在模型函数之外完成
+    net = tf.feature_column.input_layer(features, params['feature_columns'])
+    
+    # 连续流过两个全连接层，params的'hidden_units'映射到每一层的神经元数量
+    for units in params['hidden_units']:
+        net = tf.layers.dense(net, units=units, activation=tf.nn.relu)
+
+    # 开始构建输出层，首先将隐层的输出映射到分类标签身上
+    logits = tf.layers.dense(net, params['n_classes'], activation=None)
+
+    # 根据各个标签身上的输出结果，生成预测标签，这里用
+    # Compute predictions.
+    predicted_classes = tf.argmax(logits, 1)		# argmax(t, axis)返回张量t的axis轴上最大分量的索引
+    if mode == tf.estimator.ModeKeys.PREDICT:	# 定义predict动作的行为
+    	# 创建一个字典，用于记录预测结果，以及其他一些东西（内容无所谓，estimator不会直接用到）
+        predictions = {
+            'class_ids': predicted_classes[:, tf.newaxis],	# 这是numpy的语法，表示向后扩展一个维度
+            # 加入predicted_classes = [0, 1, 2]，向后扩展一个维度后变为：[[0], [1], [2]]
+            # 当然，也可以向前扩展：[:, tf.newaxis]，结果变成[[0,1,2]]
+            'probabilities': tf.nn.softmax(logits),	# 对标签上的原始输出进行softmax，作为对应的确信度
+            'logits': logits,
+        }
+        # predict动作要求必须返回一个包含预测结果的EstimatorSpec对象
+        return tf.estimator.EstimatorSpec(mode, predictions=predictions)
+
+    # Compute loss.
+    # 有两个计算预测值与实际标签之间交叉熵的函数：tf.losses.sparse_softmax_cross_entropy
+    # 和tf.losses.softmax_cross_entropy_with_logits
+    # 前者是以类别标签的索引作为输入的（也就是0，1，2……）
+    # 后者是以独热码（one-hot）作为label和logit输入的，也就是说，假如有n种可能的状态，那么
+    # label和logit都必须是[batch_size, n]的形状，label的每一行应该是类似[1, 0, 0, ..., 0]的形式
+    # 后者是以普通整数值作为label和logit的输入，也就是说，对于n种可能状态，label和logit都应是：
+    # [batch_size]形状，每一个元素对应一个整数
+    loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits)
+
+    # Compute evaluation metrics.
+    # 计算predictions与labels匹配的比例，并返回（结果是一个[0,1]之间的浮点数）
+    accuracy = tf.metrics.accuracy(labels=labels,
+                                   predictions=predicted_classes,
+                                   name='acc_op')
+    metrics = {'accuracy': accuracy}
+    tf.summary.scalar('accuracy', accuracy[1])
+
+    if mode == tf.estimator.ModeKeys.EVAL:
+        return tf.estimator.EstimatorSpec(
+            mode, loss=loss, eval_metric_ops=metrics)
+
+    # Create training op.
+    assert mode == tf.estimator.ModeKeys.TRAIN
+
+    optimizer = tf.train.AdagradOptimizer(learning_rate=0.1)
+    train_op = optimizer.minimize(loss, global_step=tf.train.get_global_step())
+    return tf.estimator.EstimatorSpec(mode, loss=loss, train_op=train_op)
+
+
+def main(argv):
+    args = parser.parse_args(argv[1:])
+
+    # Fetch the data
+    (train_x, train_y), (test_x, test_y) = iris_data.load_data()
+
+    # Feature columns describe how to use the input.
+    my_feature_columns = []
+    for key in train_x.keys():
+        my_feature_columns.append(tf.feature_column.numeric_column(key=key))
+
+    # Build 2 hidden layer DNN with 10, 10 units respectively.
+    classifier = tf.estimator.Estimator(
+        model_fn=my_model,
+        params={
+            'feature_columns': my_feature_columns,
+            # Two hidden layers of 10 nodes each.
+            'hidden_units': [10, 10],
+            # The model must choose between 3 classes.
+            'n_classes': 3,
+        })
+
+    # Train the Model.
+    classifier.train(
+        input_fn=lambda:iris_data.train_input_fn(train_x, train_y, args.batch_size),
+        steps=args.train_steps)
+
+    # Evaluate the model.
+    eval_result = classifier.evaluate(
+        input_fn=lambda:iris_data.eval_input_fn(test_x, test_y, args.batch_size))
+
+    print('\nTest set accuracy: {accuracy:0.3f}\n'.format(**eval_result))
+
+    # Generate predictions from the model
+    expected = ['Setosa', 'Versicolor', 'Virginica']
+    predict_x = {
+        'SepalLength': [5.1, 5.9, 6.9],
+        'SepalWidth': [3.3, 3.0, 3.1],
+        'PetalLength': [1.7, 4.2, 5.4],
+        'PetalWidth': [0.5, 1.5, 2.1],
+    }
+
+    predictions = classifier.predict(
+        input_fn=lambda:iris_data.eval_input_fn(predict_x,
+                                                labels=None,
+                                                batch_size=args.batch_size))
+
+    for pred_dict, expec in zip(predictions, expected):
+        template = ('\nPrediction is "{}" ({:.1f}%), expected "{}"')
+
+        class_id = pred_dict['class_ids'][0]
+        probability = pred_dict['probabilities'][class_id]
+
+        print(template.format(iris_data.SPECIES[class_id],
+                              100 * probability, expec))
+
+
+if __name__ == '__main__':
+    tf.logging.set_verbosity(tf.logging.INFO)
+    tf.app.run(main)
+

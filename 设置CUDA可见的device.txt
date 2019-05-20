@@ -1,0 +1,1 @@
+可以设置环境变量CUDA_VISIBLE_DEVICES来指定对CUDA可见的device

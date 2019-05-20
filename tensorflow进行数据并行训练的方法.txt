@@ -1,0 +1,204 @@
+一、整体上看，单机多卡的数据并行应当满足以下模式：
+	首先是建立模型和实现正向-反向传播的循环：
+	1、在host端设立context:
+		2、创建输入管道pipe
+		3、for each device, 创建device的context:
+			4、创建当前device专属的name cope:
+				5、消费pipe产生的batch数据，产生当前device上的loss信息
+				6、共享（reuse）已建立的model的variables
+				7、根据loss信息，计算当前device上的梯度信息grad
+				8、将grad存入一个全局container（位于host端，假设为global_grads）
+		9、对global_grads中的所有gradient求平均，得到全局model的gradient信息
+		10、使用gradient信息对trainable variable进行训练，得到train op这个节点
+		
+	然后是实际初始化模型，并反复进行指定次数的训练（实际就是run train op若干次）：
+	1、在同一个graph中建立session:
+		2、run initializer
+		3、for i in range(n):
+			4、run(train op)
+
+其各个部分的建立需要更细节的技巧：
+
+二、输入管道的建立：
+1、tensorflow中通过队列来缓和内存操作和文件IO的速度差异，最简单的队列机制是这样的：
+一个reader不断向一个内存队列末端添加新的文件数据，另一个processor不断从内存队列的头部开始执行出队操作来消费数据。当reader没有文件可读时，抛出一个异常，终止文件IO，当processor发现内存队列为空时，抛出另一个异常，标志着处理过程结束。
+2、tensorflow在内存队列和文件之间又添加了一个文件名队列，现在的流程是：
+一个string producer不断向文件名队列中添加新的可读文件名，reader不断从文件名队列中消费文件名，然后进行读文件的操作，把文件内的数据添加到内存队列中，processor仍然从内存队列中消费数据。
+当string producer没有新的可读文件名可生成时，停止文件名队列的入队操作；当reader读取完一个文件后，再去文件名队列取下一个文件名，如果没有下一个文件名可用，则停止内存队列的入队操作；processor发现内存队列中没有可用数据时，停止整个数据处理过程。
+
+输入管道的起点就是producer，可用的producer包括：
+tf.train.match_filenames_once			# ?
+tf.train.limit_epochs					# 创建一个queue，向其中添加n次同一个tensor
+tf.train.input_producer				# 创建一个queue，每个元素都是输入tensor的一行row
+tf.train.range_input_producer			# 创建一个queue，依次向其中添加标量0~n-1
+tf.train.slice_input_producer			# 创建一个queue，每个元素都是输入tensor的一个切片slice
+tf.train.string_input_producer			# 创建一个queue，每个元素都是输入字符串tensor的一元
+
+然后需要定义一种read操作，用于从queue中获取信息，提取对应与存储介质的一项数据，通常这项工作是由tensorflow的reader类完成的，例如：
+filename_queue = tf.train.string_input_producer(...)	# 生成文件名队列
+example, label = read_my_file_format(filename_queue)	# 读取队列的一个元素
+而read_my_file_format内部则通过某种reader类来实现：
+def read_my_file_format(filename_queue):
+	reader = tf.SomeReader(...)	# 创建一个reader
+	key, record_string = reader.read(filename_queue)	# 从介质中读取原始数据
+	example, label = tf.some_decoder(record_string)	# 对原始数据做解码（如果有必要的话）
+	processed_example = some_processing(example)	# 对数据进行必要的处理（如白化、加噪声等）
+	return processed_example, label
+
+可用的reader一般有：
+tf.ReaderBase			# reader的基类
+tf.TextLineReader		# 读取文本文件的一行并返回（以换行符为分界）
+tf.WholeFileReader		# 读取文件的所有字节并返回
+tf.IdentityReader		# 从队列中取出下一个元素并返回
+tf.TFRecordReader		# 从TFRecord文件中读取一个example的所有字节并返回
+tf.FixedLengthRecordReader	# 从文件中读取一个固定长度的字节串并返回
+
+如果只需要逐个消费数据，那么输入管道到此就可以把(example, label)元组提供给processor消费了。但很多情况下需要以batch为单位消费数据，因此管道中还需要插入一个batching queue，负责不停地积累(example,label)的数据到batch的大小，入队到batching queue中，后面的processor只需要在反复出队就行了。
+
+可用的batching queue一般有：
+tf.train.batch					# 所有batching queue的基类
+tf.train.maybe_batch				
+tf.train.batch_join				# 用一个tensor list的诸元素生成batch
+tf.train.maybe_batch_join
+tf.train.shuffle_batch				# 随机打乱(shuffle)输入tensor在batch中的位置，以此生成batch
+tf.train.maybe_shuffle_batch
+tf.train.shuffle_batch_join			# 随机打乱一个tensor list的诸元素，生成batch
+tf.train.maybe_shuffle_batch_join
+
+batching queue在构造时都可以指定执行入队操作的线程数（但是文件名队列的构造函数没有这个参数，奇怪），实际上就是从文件名队列解析文件名并从介质中向batching queue读取数据的线程数量。
+
+如何让一个输入管道流动起来？每个queue在建立之时，都会向graph中添加一个QueueRunner，负责驱动该queue对应的入队thread不断地执行入队操作。在需要启动输入管道时，只要让所有这些线程动起来就行了，具体来说，就是调用tensorflow的tf.train.start_queue_runners函数。monitored session在初始化完成后再运行，可以自动负责相关的操作，也是一样的效果。
+像上面这种情况，整个管道是由多个过程完成的，其中各个阶段都可以多线程进行，这样就产生了大量需要配合的线程。可以使用tf.train.Coordinator类来协调所有线程的工作：
+with tf.Session() as sess:
+	coord = tf.train.Coordinator()	# 创建一个协调器
+	threads = tf.train.start_queue_runners(coord=coord)		# 启动graph中所有的queue，同时把这些queue中的线程添加到coord统一协调，threads是所有线程在graph中的对应节点
+	# 主线程中消费数据
+	# ……
+	# 判断已经消费了预订数量的数据后，给协调器发信号，要它结束所辖所有线程：
+	coord.request_stop()
+	# 同步，确保所有线程确实已经终结
+	coord.join(threads)
+
+除了上述通过tensorflow预定义的queue构造器创建队列，还可以使用裸的tensorflow queue类创建QueueRunner，然后定义这些队列的入队和出队操作，最后在需要运行管道时直接给这些QueueRunner调用create_thread方法，分配实际的线程（同时也启动线程）并执行
+
+新版本的tensorflow推荐使用tf.data的API来实现输入管道的功能，这主要是通过dataset和iterator两种class
+1、dataset——由若干同质的元素构成的集合
+2、iterator——以某种方式遍历dataset的迭代器
+其中dataset发挥着类似queue的作用，实际上，dataset有两种构建方法：
+（1）直接从某个由tensor构成的source开始构建，将source tensor切分为同质的元素即可
+（2）通过使用某种变换，利用已有的dataset构建新的dataset，换句话说就是嵌套
+对于上面的文件读取管道，如果用dataset进行构建，大体上就是要从一个文件名的列表创建一个包含所有文件中所有元素的dataset，流程如下：
+（1）从文件名tensor的list出发，构建第一个文件名dataset，它的每个元素都是一个文件名：
+files = tf.data.SomeDataset(filenames)	# 这里指定某种文件类型的dataset，使得它可以正确解析单个文件，常用的有：TFRecordDataset、TextLineDataset、FixedLengthRecordDataset等，它们的返回结果分别对应于：由TFRecord文件中的所有example组成的dataset、由文本文件中的每一行string构成的dataset和由二进制文件中的固定字节数的分割构成的dataset
+（2）定义一个解码器，作用于起点dataset的每个元素，假设为decoder
+（3）对files应用解码器，生成一个新的dataset，以decoder作用于files单个元素后的返回值作为基本元素：
+dataset = files.map(map_func=decoder, num_parallel_calls)
+# 第二个参数可以指定用多少个线程来处理文件dataset，类似于多线程的入队操作
+（4）调用dataset的batch方法，转换成一个新的dataset，其基本元素=对原有dataset进行batch打包后的各个batch：
+dataset = dataset.batch(batch_size)
+
+至此，就得到了一个同样功能的输入管道，从介质中读取数据打包成batch。除此之外，dataset还有很多方法可以进一步提升输入效率，以基类tf.data.Dataset为例进行介绍：
+（1）apply(transformation_func)
+使用transformation_func作用于当前dataset的每个元素，并把返回值作为新的基本元素，构造新的dataset，可以认为是map的原型，但是更加灵活，功能更强大
+（2）batch(batch_size, drop_remainder=False)
+顾名思义
+（3）from_tensor_slices(tensors)
+对输入tensor的axis-0进行切片，以每个切片作为一个元素
+（4）interleave(map_func, cycle_length, block_length=1, num_parallel_calls=None)
+通常，作为map_func的是一个dataset的构造函数（或者其嵌套）（注意，这个与map中的map_func是不同的），从当前dataset中取出连续的cycle_length个元素，对它们执行map_func，这样会得到cycle_length个dataset，对所有这些dataset调用iterator，然后等待每个iterator返回block_length个元素，然后把这些元素装入新的dataset里，然后继续调用iterator。当某个dataset的iterator抵达end时，再从当前dataset中取下一个元素，再次使用map_func。可以设置num_parallel_calls来使用多线程异步执行map_func及其遍历过程。
+（5）map(map_func, num_parallel_calls=None)
+对num_parallel_calls个元素，分别执行map_func，每个map_func占用一个线程，map_func作用于dataset的每个元素（具体的输入参数类型和数量取决于dataset本身的元素构成，可能只是简单的单个tensor，也可能是多个tensor或是python dict这样的复杂结构），返回一个新的dataset，由map_func的返回值构成其元素。
+（6）prefetch(buffer_size)
+建立一个具有预取功能的dataset，就是说，这样的dataset不会在consumer提出consume请求之后才开始生成所请求的元素，而是维护一个大小为buffer_size的内部缓冲区，任何时候，只要缓冲区未满，就生成新的元素试图把缓冲区填满。
+（7）repeat(count=None)
+将原有dataset的每个元素随机重复count次，生成新的dataset，如果count=None，那么重复无数次
+（8）shuffle(buffer_size, seed=None, reshuffle_each_iteration=None)
+把当前dataset划分为大小为buffer_size的块，不断地从这个块中随机抽取新dataset中的下一个元素，直到一块都被采样完毕，再换下一块。这个功能主要是适用于那些太过巨大不方便在全部数据之间进行随机抽样的dataset，这时buffer_size可以小于source dataset，但要是希望得到完全随机的数据，则需要使用buffer_size大于source dataset。
+（10）concatenate(another_dataset)
+将当前dataset与另一个dataset合并，返回一个新的dataset（要求这两个dataset的元素类型必须是相同的），这个可以用于对原始数据集进行augmentation。
+
+要从dataset中取用元素，需要使用该dataset的某个迭代器iterator，iterator分为以下几种：
+（1）one-shot——通过dataset的make_one_shot_iterator()获取，不需要也不能初始化，只能用于从头到尾遍历一次dataset（反复调用iterator.get_next()即可），一般来说，one-shot iterator可以配合try catch使用，因为当iterator遍历了dataset之后会抛出一个exception：tf.errors.OutOfRangeError，如果只需要遍历一遍的话，就可以在此结束循环了，例如：
+with tf.Session() as sess:
+	while True:	# keep iterating
+	try:
+		print(sess.run(iterator.get_next()))
+	except tf.errors.OutOfRangeError:	# catch the out of range exception
+		break	# we can quit now
+（2）initialable——one_shot的iterator只能处理定长的dataset，不能使用feed_dict和placeholder处理运行时动态决定大小的dataset
+（3）iterator的get_next()可以返回dataset中的一个element，类似于placeholder，是嵌入graph的一个数据入口节点。一般情况下，不允许多次调用get_next()。
+
+如何控制epoch训练次数？第一种办法，直接让dataset重复epoch次（dataset.repeat(epoch)）；第二种办法，捕捉epoch次的OutOfRangeError，第二种方法允许自由控制在各个epoch结束时的行为，比较灵活。
+
+
+其他提升输入管道效率的技巧，请参考tf的guide：
+https://tensorflow.google.cn/guide/performance/datasets
+（1）使用prefetch的dataset，尤其是在计算资源充足，允许consumer和producer并行的情况下。通常在输入管道末尾调用prefetch创建一个预取dataset就行了
+（2）使用多线程并行执行map或apply的操作
+（3）使用interleave进行异步并行，另外，如果传输带宽足够大，但是延迟也很大，可以使用同步并行版的interleave：
+tf.contrib.data.parallel_interleave(
+    map_func,		# 映射函数
+    cycle_length,		# 同步并行占用传输带宽的map操作数
+    block_length=1,	# 每次map连续执行的次数
+    sloppy=False,	# 是否强制保持元素的逻辑次序（True为不保留，False为保留）
+    buffer_output_elements=None,
+    prefetch_input_elements=None
+)
+
+三、计算当前batch的loss信息和梯度信息
+1、计算loss信息就是前向传播inference的过程，即从输入层开始逐层计算神经网络的输出，最后得到预测结果，再与label进行比对，计算loss函数。为此，在device上必须有完整的神经网络模型（这也是数据并行的必然要求）。
+2、这里采用的是server-client的模式，即model的trainable variable都实际保存在server上（一般就是CPU），而在各个负责训练batch的client（通常是GPU）上，只在需要用到这些variable时从server取来数据，并按照同样的graph结构引导训练集数据通过网络前向传播。
+3、为了实现存储与使用的分离，采用的是这样一种模式：
+	（1）在trainable variable的声明期，直接指定其存储位置
+	（2）在第一个需要使用model的设备上，调用model的构建函数之后，model中的trainable variable都自动建立在server上了
+	（3）此时，使用tensorflow的variable共享机制，将model中的trainable variable设置为共享（reuse）
+	（4）接着在其他需要使用model的设备上，调用model的构建函数，建立各自的model，但由于server端的variable已经共享了，并不会因为试图重复建立variable而产生冲突
+	（5）在各个设备上消费batch数据，不断产生inference结果
+4、以下是具体的tensorflow技术细节：
+（1）Q:如何指定variable的存储位置：
+	 A:切换device的context，在context中建立的variable就自动存储在当前device上。
+	 	with tf.device('XXX'):		
+	 	# XXX是tensorflow可识别的device name字符串，一般是cpu:0或者/gpu:?这种
+	 		x = tf.Variable('x')
+
+（2）Q:如何将指定的variable设置为共享？
+	 A:将希望共享的variable置于同一个variable scope中（实质上是一种python context manager），然后调用scope的reuse_variables()函数。另外，variable scope作为类似命名空间的概念，本身允许复用，即在不同的地方使用相同的name创建的variable scope，都视同一个，在这其中建立的variable都位于相同的variable scope中。
+
+4、注意，与model的variable信息不同，loss信息分为两类，一类是分布在各个实际计算设备上的local loss，这些variable不能复用，每个device都有各自的取值；另一类是归总所有实际设备上的local loss之后求平均得到的全局loss，这个variable只能有一个取值，存储在server端，用于更新server端的model之用。
+5、逻辑上讲，device端应当只使用自己所属的loss，而server端可以使用全部的loss。
+为了在相同的模型构建函数中实现这一点，可以采用tensorflow的collection机制：一个collection是一系列相同shape和dtype的tensor构成的逻辑上的集合，collection的特点是在任何位置创建后，其他位置都可以了解其内容。
+由此，在构建模型的时候，针对需要server端了解的本地数据，先建立一个collection，把这些tensor放入collection，然后在server端需要获取所有device端数据的时候，从这个collection中获取即可。
+具体来说：
+（1）Q:如何建立collection，并把tensor放入其中？
+	 A:将tensor加入collection，使用tf.add_to_collection(name, value)，其中name是目标collection的名字字符串，如果是第一次向其中添加tensor，这个collection会自动创建；value则是要添加的tensor。
+（2）Q:如何从collection中获取tensor？
+	 A:使用tf.get_collection(name, scope=None)，其中name就是collection的名字，scope是限定条件：限定只提取隶属于某个name scope/variable scope的tensor。这个函数的返回值是一个满足条件的tensor的list（比如说collection中满足条件的tensor有a, b, c，那么返回就是[a, b, c]）。
+
+这样，把计算好的loss放入名为'loss'的collection，需要在当前device上使用时，就用当前device的name scope作为过滤条件，从collection中get。需要在server上使用时，则不附加任何过滤条件，直接get所有tensor
+
+6、下一个问题：tensorflow如何利用loss函数计算梯度信息，再用梯度信息更新模型参数的（也就是反向传播的过程是怎样建立的）。
+一种最简单的做法是建立一个optimizer后，求得loss函数后，调用optimizer的minimize函数就可以更新整个model了，它的声明如下：
+def minimize(self, loss, global_step=None, var_list=None,
+             gate_gradients=GATE_OP, aggregation_method=None,
+             colocate_gradients_with_ops=False, name=None,
+             grad_loss=None)
+其中的self是optimizer的this指针，不用管；通常只需要输入loss函数，指定global_step即可；也可以通过指定var_list来控制对哪些variable进行更新（默认是所有trainable variable）
+7、如果细分，minimize实际上只是做了三件事：
+（1）计算指定variable list的梯度信息，使用：
+compute_gradients(loss, var_list=None,
+    gate_gradients=GATE_OP,
+    aggregation_method=None,
+    colocate_gradients_with_ops=False,
+    grad_loss=None)
+它的返回结果是一个以(gradient, variable)为元素的list，类似[(grad1, var1), (grad2, var2), ..., (gradn, varn)]的形式。
+（2）根据optimizer的具体特点，对前面计算好的gradient信息进行处理（比如松弛等）
+（3）将gradient信息更新到各个variable上，使用：
+apply_gradients(grads_and_vars, global_step=None, name=None)
+它的返回结果是一个op，用以实现更新variable的操作（实质上就是对所有variable的一个assign操作）
+
+其中的（1）和（3）的compute_gradients与apply_gradients函数都是tensorflow的optimizer基类就提供的接口，这意味着如果有需要，可以将三个步骤拆分开，在其中加入自定义的操作，同样能完成反向传播。
+
+8、为了平均各个device上求得的local gradient，更新model的参数，就可以先在各个model中调用optimizer的compute_gradients计算local gradient，然后把计算结果汇总到一起（可以使用collection，或者直接放进一个统一的tensor list里也行）。之后在server端把所有local gradient信息平均后得到一个全局的global gradient，再调用optimizer的apply_gradients函数更新server端保存的model参数即可。
+
+
+

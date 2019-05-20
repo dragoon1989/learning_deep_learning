@@ -1,0 +1,70 @@
+tensorflow中的iterator是使用dataset向graph中导入数据的关键管道。
+
+1、一次性，不可参数化的管道one shot iterator
+这是最简单的iterator，它只能在初始化时与某个dataset绑定，之后不允许重新初始化。
+并且，one shot iterator不接受参数化，即与之绑定的dataset必须在初始化之前就确定大小
+初始化：
+iterator = dataset.make_one_shot_iterator()
+迭代：
+next = iterator.get_next()
+
+2、一次性，可参数化的管道initializable iterator
+这种iterator可以接受参数化的dataset，即dataset的大小可以在初始化之时再确定：
+构造一个可以使用placeholder动态控制大小的dataset
+numbers = tf.placeholder(tf.int64,shape=[])
+dataset = tf.data.Dataset.range(numbers)
+初始化：
+iterator = dataset.make_initializable_iterator()
+迭代：
+next = iterator.get_next()
+
+3、可复用的管道：
+这种iterator可以复用（允许多次初始化，每次绑定到不同的dataset）
+构造两个可用的dataset
+training_data = tf.data.Dataset.range(10)
+validation_data = tf.data.Dataset.range(5)
+模板化iterator，这里还没有初始化，只是定义了一个iterator的模板，规定了它可以绑定到什么类型的dataset上（由dataset元素的type和shape决定）
+iterator = tf.data.Iterator.from_structure(training_data.output_types,
+                                               		      training_data.output_shapes)
+也就是说，training_data和validation_data必须是element type和shape相同
+初始化（绑定到training_data）：
+session.run(iterator.make_initializer(training_data))
+迭代：
+next = iterator.get_next()
+初始化（绑定到validation_data）：
+session.run(iterator.make_initializer(validation_data))
+迭代：
+next = iterator.get_next()
+
+4、可复用，可馈送（feeding）的iterator：
+上面的可复用iterator，在每次重新绑定后，都会自动定位到dataset的起始位置。如果我们希望在多个dataset之间切换时保留iterator在对应dataset中的迭代位置信息，就需要使用iterator的feeding功能：
+所谓iterator的feeding功能，是指iterator不是简单地绑定到dataset上，而是通过placeholder绑定到“某个”iterator上，第二个iterator可以在运行过程中通过给placeholder馈送不同的值来自由选择。这样，各个dataset中的迭代位置信息是由第二个iterator记录的，第一个iterator则作为所有dataset的共用管道负责向graph中注入数据，实现了可复用且可记录迭代信息的功能。
+
+构造两个可用的dataset
+training_data = tf.data.Dataset.range(10)
+validation_data = tf.data.Dataset.range(5)
+
+创建对应的iterator（也就是上面说的“第二个”iterator）
+train_iterator = training_data.make_one_shot_iterator()
+validation_iterator = validation_data.make_one_shot_iterator()
+
+获取两个iterator的string handle，用于馈送给placeholder。所谓string handle，是tensorflow为每个iterator创建的唯一字符串形式的ID，不过这个handle作为graph中的一个scalar tensor node，它的真实值必须在某个sess中run才能得到，记住，placeholder只能接受值而非tensor作为馈送量。
+train_handle = train_iterator.string_handle()
+validation_handle = validation_iterator.string_handle()
+
+创建placeholder
+handle = tf.placeholder(tf.string, shape=[])
+
+创建第一个iterator模板，使用可馈送的placeholder决定其指向，并定义其element的type：
+iterator = tf.data.Iterator.from_string_handle(handle, train_iterator.output_types)
+
+迭代：
+next = iterator.get_next()
+
+在session中，绑定到train_data：
+train_handle_val = sess.run(train_handle)		# 计算string handle的真值
+sess.run(next, feed_dict={handle : train_handle_val})		# 馈送
+
+在session中，绑定到validation_data：
+validation_handle_val = sess.run(validation_handle)		# 计算string handle的真值
+sess.run(next, feed_dict={handle : validation_handle_val})		# 馈送

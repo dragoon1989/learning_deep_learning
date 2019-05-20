@@ -1,0 +1,8 @@
+1、如果使用自己建立的variable，搭配tf.nn的卷积模块搭建卷积层，那么只需要在构建variable的构造函数（get_variable或者Variable）中指定initializer参数即可
+
+2、如果使用封装好的卷积模块（tf.keras、tf.layers），同样只需要指定initializer参数即可
+
+3、可用的initializer：
+tf scope中有多种常用initializer，如constant、random_normal等
+tf.initializer模块
+tf.contrib.layers模块

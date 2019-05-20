@@ -1,0 +1,50 @@
+1、抓取镜像：
+docker pull 镜像路径[:tag号——默认是latest]
+
+2、导出和导入镜像：
+docker export 容器名/容器ID > xxx.tar
+docker import - 新的镜像名:标签 < xxx.tar
+严格来说，export是把一个现有的容器导出为镜像文件，因此它不会保存这个容器之前各个版本的历史信息，由它生成的镜像是无历史的，也没法版本回滚
+
+docker save -o xxx.tar 镜像名
+docker load < xxx.tar
+这两个命令才是针对镜像的导入导出，导出的镜像中包含了此前的各种历史版本信息，支持版本回滚
+
+3、由镜像创建容器
+docker run [参数] 镜像名
+常用参数包括：
+-it		以交互模式运行
+--name 容器名		指定容器名（空格分开即可）
+-d		后台模式（生成的容器除非通过docker container stop终止，否则不会stop）
+-p 主机端口:容器端口		端口映射，将主机的端口与容器的端口建立对应关系
+-v 主机路径:容器路径		虚拟挂载，将主机路径挂载到容器路径上，实现文件的共享
+						（1）容器路径不能是相对路径（必须以/开头），主机路径虽然支持相对路径，但是实际上不是当前路径的相对路径，而是在/var/lib/docker/volumes/下的相对路径，所以最好也还是用自己指定的绝对路径
+						（2）可以通过-v 主机路径:容器路径:权限说明    的方式来指定挂载路径的读写权限（默认是读写rw）
+--rm		要求退出容器后自动remove掉该容器
+
+4、管理容器
+docker ps		列出所有running的容器 = docker container ls
+docker ps -a	包括已经stop的容器 = docker container ls -a
+
+docker container stop 容器ID			终止容器
+docker container rm 容器ID			移除容器
+
+docker exec 参数 容器ID 命令			在某个指定容器中执行指定命令（常用参数-it）
+								例如：docker exec -it XXX /bin/bash
+
+docker tag 旧容器名/容器ID[:标签] 新容器名[:标签]	修改容器名
+
+在容器内部的命令行模式下要退出，可以用Ctrl+D的快捷键
+
+5、管理镜像
+docker image ls						列出所有镜像
+docker image rm 镜像名				移除镜像
+
+6、建立docker用户组
+docker需要使用Unix socket的权限，默认该权限只对root用户开放，因此可能会在执行某些docker命令时出现Got permission denied while trying to connect to the Docker daemon socket at unix ...的错误。
+为了赋予docker足够的权限，可以新建一个名为docker的用户group，把需要使用docker的用户加入到这个group中，由于docker的guard process（守护进程）启动时是会自动赋予docker group正确权限的，因此就可以让这些登记用户正常使用docker所有命令了。
+sudo groupadd docker		# 创建docker group
+sudo gpasswd -a ${USER} docker	# 将当前用户（也就是${USER}）加入docker group
+newgrp - docker				# 更新group信息
+sudo service docker restart		# 重启docker服务
+

@@ -1,0 +1,35 @@
+tensor有三项重要属性：
+
+1、tensor名：
+作为tensor的惟一标识，同时也是描述tensor计算过程的特性，这一点可以通过print看到：
+res = tf.add(a, b, name='add')
+print res
+输出的是：
+Tensor("add:0", shape=(2,), dtype=float32)
+说明res作为一个tensor，是计算节点"add"的首个输出（编号0）
+
+2、tensor形状：
+可以通过tensor.shape来查看，例如上面的shape=(2,)说明是一个包含2个元素的一维数组。
+也可以用
+tf.shape(x)来获取张量x的shape信息（返回值是一个tensor，是一维向量，各分量是x对应维度的长度），此外，tf.shape(x)也可以用于获取非张量的x的形状信息。
+
+3、tensor类型：
+可以通过tensor.dtype来查看，例如上面的dtype=float32表示单精度浮点数
+构造常量或变量时，如果不明确指定dtype，就会使用tensorflow的默认类型：没有小数点的整数就是int32，有小数点的则是float32
+
+对于复杂计算，推荐尽量使用张量记录中间结果，这样可以在需要的时候方便地获取中间值，而不需要重复执行计算流
+
+tensor只描述获取该数据的流程，并不是数据本身，要获得数据本身，必须在某个session中对其进行实际计算（evaluation），例如：
+with tf.Session() as sess		# 使用tensorflow的默认会话
+	res.eval()				# 在默认会话中计算
+	res.eval(session=sess)	# 会话也可以指定
+	sess.run(res)			# 这个也可以
+
+
+4、打印tensor信息：
+可以通过tf.Print函数来打印tensor的信息：
+tf.Print(input_,
+	   data, ...)
+
+input_是输入tensor，当该tensor的值计算得到后，打印信息
+data是要打印的信息列表（list），Print将逐个打印列表的各项

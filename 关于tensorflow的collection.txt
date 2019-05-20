@@ -1,0 +1,24 @@
+collection是一种存储graph节点的容器/集合，可以根据需要将不同类型的元素存入其中
+
+1、将节点放入collection：
+tf.add(name, value)
+将value节点放入名为name的collection（如果没有则自动创建）
+
+2、将节点取出collection：
+values = tf.get_collection(key, scope)
+从default graph中名为key的collection中取出所有位于scope（name scope或variable scope）中的节点，返回值是一个graph节点的list（与普通的tensor list不同，只有一些特殊的函数以之作为输入参数）
+
+3、应用举例：
+在网络中使用正则化时，需要包含两步：
+（1）确定对哪些参数进行正则化约束
+（2）将这些参数的正则约束项添加到优化目标函数上，进行有约束的优化
+
+第一步中需要将网络的权重参数记录下来，用于进行约束
+如果是使用高层api（tf.layers或tf.keras）建立的layer，其中的权重会被自动添加进tf.GraphKeys.WEIGHTS这个collection中（不包含biases）；如果是使用底层api（tf.nn或者直接使用variable）建立的layer，需要自己手动把需要约束的权重添加到某个自己的collection中。
+第二步中，可以使用tf.contrib.layers提供的接口来计算约束项并自动合并到目标函数中：
+tf.contrib.layers.l1_regularizer(scale, scope=None)
+tf.contrib.layers.l2_regularizer(scale, scope=None)
+（scale就是正则项前面的系数lambda）
+
+tf.contrib.layers.apply_regularization(regularizer, weights_list=None)
+对weights_list中的所有变量创建regularizer决定的正则化约束项，这里的weights_list就接收collection或node list作为输入，如果是默认状态，则直接取tf.GraphKeys.WEIGHTS

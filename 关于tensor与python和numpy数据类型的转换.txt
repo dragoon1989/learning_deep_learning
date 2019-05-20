@@ -1,0 +1,4 @@
+1、理论上，tensor类型是graph中的一个node，在构建graph时，每个tensor在graph中只是起到一个占位符的作用，通常并不具有具体的值，因此tensor向python数据类型的转换在graph构建阶段是不可行的，只能在evaluation阶段才能通过run获取某一次数据流中的节点数值。
+
+2、基于同样的道理，从python或numpy数据类型向tensor转换时，通常只能创建一个constant tensor node，虽然如此，在实际graph中，这个constant tensor可以与正常tensor进行运算。
+通常，在构建graph时，输入网络参与tensor之间运算的python或numpy数据类型会自动转换为对应的tensor，或者可以通过tf.convert_to_tensor来进行显式的转换。
