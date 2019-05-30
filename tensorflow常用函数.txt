@@ -62,4 +62,30 @@ tf.equal(
 
 计算x和y的逐元素==结果，x和y的shape与dtype必须相同，返回结果形状不变，dtype=bool
 
+7、
+tf.shape(x)
+类似于numpy里的shape属性，返回一个1D vector tensor
+
+8、
+tf.one_hot(
+	indices,
+	depth,
+	on_value=None,
+	off_value=None,
+	axis=None,
+	dtype=None,
+	name=None
+)
+将sparse code转换为one hot code。
+（1）indices是输入的sparse code，类型为整数，凡是落在[0, depth)范围的都将被转换为合法的one hot code，不在此范围内的，其形状有如下几种可能：
+indices是一个scalar，则返回一个长度为depth的1D vector
+indices是一个1D vector，长度为N，则返回一个矩阵，shape=[N, depth]
+indices是一个2D tensor，shape=[B,N]，则返回一个3D tensor，shape=[B,N,depth]
+（2）depth是one-hot code的bit数
+（3）on_value指定hot bit的值，off_value是其他bit的值
+（4）axis一般取默认值（-1）
+
+9、tf.nn.softmax(x)
+
+理论上softmax的结果一定是>0的，但是当模型训练到后期，由于浮点数的精度问题，有可能输出的某些位上的预测值在数值上减小到0，这在后面计算cross entropy时尤其需要注意。
 

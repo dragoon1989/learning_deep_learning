@@ -1,1 +1,5 @@
-可以设置环境变量CUDA_VISIBLE_DEVICES来指定对CUDA可见的device
+可以设置环境变量CUDA_VISIBLE_DEVICES来指定对CUDA可见的device：
+import os
+
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'		# 只使用第一块GPU
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,2'		# 使用第一和第三块GPU
